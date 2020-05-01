@@ -1,0 +1,593 @@
+---
+title: "Final_project"
+output: html_document
+---
+
+```{r}
+library('ggmap')
+library('dplyr')
+library('stringr')
+library('tm')
+library('usmap')
+library('tidytext')
+data=read.csv('C:/Users/Zefeng Jin/Downloads/alldata.csv',stringsAsFactors = F,header=T, na.strings=c("","NA"))
+
+data = data[,c(1,2,3,5,6)]
+```
+
+#remove missing values from data set
+```{r}
+data<-na.omit(data)
+
+data$state <- sapply(data$state, trimws)
+
+```
+
+#plot job demand of different companies 
+```{r}
+library(plotly)
+library(ggplot2)
+library(RColorBrewer)
+agg_com<- data%>% count(company) %>% arrange(desc(n))
+p <- ggplot(data=agg_com[1:10,], aes(x=reorder(company,-n), y=n))+
+  geom_bar(stat='identity', fill = brewer.pal(length(agg_com$company[1:10]),'Set3')) + 
+  ggtitle('Data Science Related Jobs by Companies')+
+  theme_bw() + 
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+fig <- ggplotly(p) 
+fig %>% layout(xaxis = list(title = ""),
+         yaxis = list(title = ""))
+```
+
+# plot demand of different job
+```{r}
+library(plotly)
+agg_state<- data%>% count(state) %>% arrange(desc(n))
+# give state boundaries a white border
+l <- list(color = toRGB("white"), width = 2)
+# specify some map projection/options
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = TRUE,
+  lakecolor = toRGB('white')
+)
+
+fig <- plot_geo(agg_state, locationmode = 'USA-states')
+fig <- fig %>% add_trace(
+    z = agg_state$n, locations = agg_state$state,
+    color = agg_state$n, colors = 'Reds'
+  )
+fig <- fig %>% colorbar(title = "The Number of jobs")
+fig <- fig %>% layout(
+    title = '2018 US Data Science Related Jobs by State',
+    geo = g
+  )
+fig
+```
+
+
+
+#plot job demand of different cities
+```{r}
+agg_city<- data%>% count(city) %>% arrange(desc(n))
+p <- ggplot(data=agg_city[1:10,], aes(x=reorder(city,-n), y=n))+
+     geom_bar(stat='identity',fill = brewer.pal(length(agg_city$city[1:10]),'Paired')) + 
+     ggtitle('Data Science Related Jobs by Cities') + 
+     theme_bw() + 
+     theme(axis.text.x=element_text(angle=45, hjust=1))
+fig <- ggplotly(p)
+fig %>% layout(xaxis = list(title = ""),yaxis = list(title = ""))
+```
+
+
+```{r}
+library(packcircles)
+library(ggplot2)
+library(viridis)
+library(ggiraph)
+agg_city<- data%>% count(city) %>% arrange(desc(n))
+agg_city <- agg_city[1:20,]
+packing <- circleProgressiveLayout(agg_city$n, sizetype='area')
+agg_city <- cbind(agg_city, packing)
+dat.gg <- circleLayoutVertices(packing, npoints=50)
+dat.gg$value <- rep(agg_city$n, each=51)
+ggplot() + 
+  
+  # Make the bubbles
+  geom_polygon(data = dat.gg, aes(x, y, group = id, fill=value), colour = "black", alpha = 0.6) +
+  scale_fill_viridis()  +
+  
+  # Add text in the center of each bubble + control its size
+  geom_text(data = agg_city, aes(x, y, size=n, label = city)) +
+  scale_size_continuous(range = c(1,4)) +
+  
+  # General theme:
+  theme_void()  + 
+  theme(legend.position="none") + 
+  coord_equal()
+
+widg <- ggiraph(ggobj = p, width_svg = 7, height_svg = 7)
+```
+
+
+#Plot for top most offered roles
+```{r}
+agg_job<- data%>% count(position) %>% arrange(desc(n))
+p <- ggplot(data=agg_job[1:10,], aes(x=reorder(position,-n), y=n))+
+  geom_bar(stat='identity',fill = brewer.pal(length(agg_job$position[1:10]),'Set3')) + 
+  ggtitle('Most Popular Job Titles') + 
+  theme_light() + 
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+fig <- ggplotly(p)
+fig %>% layout(xaxis = list(title = ""),
+         yaxis = list(title = "")) 
+```
+
+
+
+# clean position and job description columns 
+```{r}
+initial_clean <- function(col) {
+col<-tolower(col) # convert words to low case
+col<-gsub("http[[:alnum:][:punct:]]*"," ",col) #remove url
+col<-gsub("[^a-zA-Z]"," ",col) # remove non-english words
+col<-gsub("[[:punct:]]"," ",col) # remove punctuations
+col<-gsub("\n"," ",col) # remove new line between paragraphs
+col<-gsub("\\s+"," ",col) # remove extra spaces
+}
+data$description <- initial_clean(data$description) # initial clean for description
+data$position <- initial_clean(data$position) # initial clean for position
+data$position[1]
+
+```
+# analyze job position
+```{r}
+library("tm")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+wordcloudData = 
+  data%>%
+  unnest_tokens(output=word,input=position)%>%
+  anti_join(stop_words)%>%
+  group_by(word)%>%
+  summarize(freq = n())%>%
+  arrange(desc(freq))%>%
+  ungroup()%>%
+  data.frame()
+set.seed(617)
+wordcloud(words = wordcloudData$word,wordcloudData$freq,scale=c(5,1), random.order=FALSE, max.words = 50,colors=brewer.pal(10,"Spectral"))
+
+```
+# reclassify job positions
+```{r}
+for (i in 1:nrow(data)) {
+  w = unlist(strsplit(data$position[[i]]," ", fixed = TRUE))
+  if (any(w == "scientist")) {
+    data$position_categories[i] = "scientist"
+  } else if (any(w == 'analyst')|| any(w == 'statistican')) {
+    data$position_categories[i] = 'analyst'
+  } else if (any(w == 'engineer')|| any(w == 'engineering') || any(w == 'programmer')|| any(w == 'developer')) {
+    data$position_categories[i] = 'engineer'
+  } else if (any(w == 'learning')|| any(w == 'ai') || any(w == 'artificial')){
+    data$position_categories[i] = 'machine learning'
+  } else if (any(w == 'manager')|| any(w == 'management') || any(w == 'director')|| any(w == 'consultant')|| any(w == 'coordinator')|| any(w == 'administrator')){
+    data$position_categories[i] = 'business management'
+  } else {
+    data$position_categories[i] = 'others'
+  }
+}
+data$position_categories <- as.factor(data$position_categories)
+```
+# plot the distribution of position categories
+```{r}
+library(plotly)
+colors = c(	'rgb(152,251,152)','rgb(255,99,71)','rgb(147,112,219)','rgb(250,250,210)','rgb(100,149,237)' ,'	rgb(221,160,221)')
+agg_position<- data%>% count(position_categories) %>% arrange(desc(n))
+
+fig <- plot_ly(type='pie', labels=agg_position$position_categories, values=agg_position$n, 
+               textinfo='label+percent', insidetextorientation='radial', marker = list(colors = colors))
+fig %>% layout(title = 'Distribution of Job Categories')
+```
+# separe dataset to sub dataset based on new position categories
+```{r}
+scientist_jobs = data[data$position_categories == "scientist",]
+analyst_jobs = data[data$position_categories == "analyst",]
+engineer_jobs = data[data$position_categories == "engineer",]
+ML_jobs = data[data$position_categories == "machine learning",]
+business_managment_jobs = data[data$position_categories == "business management",]
+```
+
+#What tools are desired the most?
+```{r}
+tool=as.character(c('python','pytorch','sql','mxnet', 'mlflow', 'einstein', 'theano', 'pyspark', 'solr', 'mahout', 
+
+ 'cassandra', 'aws', 'powerpoint', 'spark', 'pig', 'sas', 'java', 'nosql', 'docker', 'salesforce', 'scala', 'r',
+
+ 'c', 'c++', 'net', 'tableau', 'pandas', 'scikitlearn', 'sklearn', 'matlab', 'scala', 'keras', 'tensorflow', 'clojure',
+
+ 'caffe', 'scipy', 'numpy', 'matplotlib', 'vba', 'spss', 'linux', 'azure', 'cloud', 'gcp', 'mongodb', 'mysql', 'oracle', 
+
+ 'redshift', 'snowflake', 'kafka', 'javascript', 'qlik', 'jupyter', 'perl', 'bigquery', 'unix', 'react',
+
+ 'scikit', 'powerbi', 's3', 'ec2', 'lambda', 'ssrs', 'kubernetes', 'hana', 'spacy', 'tf', 'django', 'sagemaker',
+
+ 'seaborn', 'mllib', 'github', 'git', 'elasticsearch', 'splunk', 'airflow', 'looker', 'rapidminer', 'birt', 'pentaho', 
+
+ 'jquery', 'nodejs', 'd3', 'plotly', 'bokeh', 'xgboost', 'rstudio', 'shiny', 'dash', 'h20', 'h2o', 'hadoop', 'mapreduce', 
+
+ 'hive', 'cognos', 'angular', 'nltk', 'flask', 'node', 'firebase', 'bigtable', 'rust', 'php', 'cntk', 'lightgbm', 
+
+ 'kubeflow', 'rpython', 'unixlinux', 'postgressql', 'postgresql', 'postgres', 'hbase', 'dask', 'ruby', 'julia', 'tensor'))
+
+requirement_analysis <- function(dataframe, requirements) {
+  count<- dataframe%>%
+  unnest_tokens(input = description, output = word)%>%
+  select(word)%>%
+  anti_join(stop_words)%>%
+  group_by(word)%>%
+  summarize(count = n())
+  
+  zero <- c()
+  name <- c()
+  for (i in 1:length(requirements)){
+    if (requirements[i] %in% count$word){
+      zero <- c(zero,count[which(count$word == requirements[i]),2])
+      name <- c(name,requirements[i])
+    }
+  }
+  zero_1<- unlist(zero)
+  name_1<- unlist(name)
+  zero_2<- data.frame(n=zero_1)
+  name_2<- data.frame(word=name_1)
+  requirement<- cbind(name_2,zero_2)
+  rank_requirement <- arrange(requirement,desc(n))
+  p <- ggplot(data=rank_requirement[1:5,], aes(x=reorder(word,-n), y=n))+
+  geom_bar(stat='identity',fill = brewer.pal(length(rank_requirement$word[1:5]),'Accent')) + 
+  theme_light() + 
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+  fig <- ggplotly(p)
+  fig 
+}
+requirement_analysis(scientist_jobs,tool) %>% layout(title = "Top 5 Skills for data scientist",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(analyst_jobs,tool) %>% layout(title = "Top 5 Analytics Tools for data analyst",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(engineer_jobs,tool) %>% layout(title = "Top 5 Analytics Tools for data engineer",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(business_managment_jobs,tool) %>% layout(title = "Top 5 Analytics Tools for business_managment_jobs",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(ML_jobs,tool) %>% layout(title = "Top 5 Analytics Tools for machine learning",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+```
+
+
+#Degree
+```{r}
+degreelist=as.character(c("master", "master's","phd", "ph.d","bachelor","bachelor's","mba"))
+degree_analysis <- function(dataframe,degrees){
+  count<- dataframe%>%
+  unnest_tokens(input = description, output = word)%>%
+  select(word)%>%
+  anti_join(stop_words)%>%
+  group_by(word)%>%
+  summarize(count = n())
+  zero <- c()
+  name <- c()
+  for (i in 1:length(degrees)){
+  if (degrees[i] %in% count$word){
+      zero <- c(zero,count[which(count$word == degrees[i]),2])
+      name <- c(name,degrees[i])
+    }
+  }
+  zero_1<- unlist(zero)
+  name_1<- unlist(name)
+  zero_2<- data.frame(n=zero_1)
+  name_2<- data.frame(word=name_1)
+  degree<- cbind(name_2,zero_2)
+  rank_degree = arrange(degree,desc(n))
+  rank_degree
+}
+Scientist <- degree_analysis(scientist_jobs,degreelist)
+Scientist$position <- "Data Scientist"
+analyst <- degree_analysis(analyst_jobs,degreelist)
+analyst$position <- 'Data Analyst'
+business_management<- degree_analysis(business_managment_jobs,degreelist)
+business_management$position <- 'Business management'
+data_science_degree <- rbind(Scientist,analyst,business_management)
+names(data_science_degree)[names(data_science_degree) == 'word'] <- 'Degree'
+ggplot(data_science_degree, aes(fill=Degree, y=n, x=position)) + 
+  geom_bar(position="fill", stat="identity") + theme_bw()
+```
+```{r}
+library(viridis)
+library(hrbrthemes)
+ggplot(data_science_degree, aes(fill=Degree, y=n, x=position)) + 
+  geom_bar(position="fill", stat="identity")  + theme_ipsum() + ylab('') + xlab('')
+
+```
+
+
+#Skills
+```{r}
+skill_list <- as.character(c('statistics', 'cleansing', 'chatbot', 'cleaning', 'blockchain', 'causality', 'correlation', 'bandit', 'anomaly', 'kpi','dashboard', 'communication','leadership','geospatial','teamwork','ocr', 'econometrics', 'pca', 'gis', 'svm', 'svd', 'tuning', 'hyperparameter', 'hypothesis', 'salesforcecom', 'segmentation', 'biostatistics', 'unsupervised', 'supervised', 'exploratory', 'recommender', 'recommendations', 'sequencing', 'probability', 'reinforcement', 'graph', 'bioinformatics', 'chi', 'knn', 'outlier', 'etl', 'normalization', 'classification', 'optimizing', 'prediction', 'forecasting', 'clustering', 'cluster', 'optimization', 'visualization', 'nlp', 'c#', 'regression', 'logistic', 'nn', 'cnn', 'glm', 'rnn', 'lstm', 'gbm', 'boosting', 'recurrent', 'convolutional', 'bayesian','bayes','ml'))
+
+requirement_analysis(scientist_jobs,skill_list) %>% layout(title = "Top 5 skills Tools for data scientist",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(analyst_jobs,skill_list) %>% layout(title = "Top 5 skills for data analyst",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(engineer_jobs,skill_list) %>% layout(title = "Top 5 skills for data engineer",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(ML_jobs,skill_list) %>% layout(title = "Top 5 skills for machine learning",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+requirement_analysis(business_managment_jobs,skill_list) %>% layout(title = "Top 5 skills for business_managment_jobs",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""))
+
+```
+
+#Steps for Creating a dictionary
+```{r}
+library(tm)
+corpus = Corpus(VectorSource(data$description))
+corpus[[1]]
+corpus[[1]][1]
+
+#Convert to lower case
+corpus = tm_map(corpus,FUN = content_transformer(tolower))
+corpus[[1]][1]
+
+#Remove stopwords
+corpus = tm_map(corpus,FUN = removeWords,c(stopwords('english')))
+corpus[[1]][1]
+
+#Strip whitespace
+corpus = tm_map(corpus,FUN = stripWhitespace)
+corpus[[1]][1]
+
+#Create a dictionary
+dict = findFreqTerms(DocumentTermMatrix(Corpus(VectorSource(data$description))),
+                     lowfreq = 0)
+dict_corpus = Corpus(VectorSource(dict))
+
+#Stem document
+corpus = tm_map(corpus,FUN = stemDocument)
+corpus[[1]][1]
+```
+
+#Create a document term matrix
+```{r}
+####
+#Create a document term matrix (tokenize)
+dtm_tfidf = DocumentTermMatrix(x=corpus,
+                               control = list(weighting=function(x) weightTfIdf(x,normalize=F)))
+
+xdtm_tfidf = removeSparseTerms(dtm_tfidf,sparse = 0.90)
+
+xdtm_tfidf = as.data.frame(as.matrix(xdtm_tfidf))
+colnames(xdtm_tfidf) = stemCompletion(x = colnames(xdtm_tfidf),
+                                      dictionary = dict_corpus,
+                                      type='prevalent')
+colnames(xdtm_tfidf) = make.names(colnames(xdtm_tfidf))
+sort(colSums(xdtm_tfidf),decreasing = T)
+
+data_tfidf = cbind(job_position = data$position_categories,xdtm_tfidf)
+```
+#Predictive Models (using TF features)
+```{r}
+set.seed(617)
+set.seed(1031)
+data_tfidf <- data_tfidf[,-269]
+split = sample(x = c('train','validation','test'),size = nrow(data_tfidf),replace = T,prob = c(0.5,0.3,0.2))
+train = data_tfidf[split=='train',]
+validation = data_tfidf[split=='validation',]
+test = data_tfidf[split=='test',]
+```
+
+# boosting decision tree model
+```{r}
+set.seed(617)
+library(h2o)
+h2o.init()
+train_h2o = as.h2o(train)
+validation_h2o = as.h2o(validation)
+test_h2o = as.h2o(test)
+
+```
+
+```{r}
+model1 = h2o.gbm(x=2:552,
+                         y = 1,
+                         training_frame = train_h2o, distribution = "multinomial",
+                         ntrees = 600, max_depth = 3,seed=1031)
+```
+```{r}
+pred = h2o.predict(model1,newdata = validation_h2o, type = 'class')
+h2o.confusionMatrix(model1,validation_h2o) # Using a built-in function
+```
+```{r}
+h2o.performance(model1,valid = FALSE)
+```
+```{r}
+h2o.confusionMatrix(model1,test_h2o)
+```
+# build up deep learning model
+```{r}
+model2 = h2o.deeplearning(x=2:552,
+                         y = 1,
+                         training_frame = train_h2o,
+                         hidden = c(100,100,100),
+                         seed=1031)
+```
+```{r}
+pred = h2o.predict(model2,newdata = validation_h2o, type = 'class')
+h2o.confusionMatrix(model2,validation_h2o) 
+```
+# Tune for deep learning model
+```{r}
+hyper_parameters = list(activation=c('Rectifier','Tanh','Maxout','RectifierWithDropout','TanhWithDropout','MaxoutWithDropout'),
+                        hidden=list(c(20,20),c(50,50),c(100,100,100), c(30,30,30),c(50,50,50,50),c(25,25,25,25)),
+                        l1=seq(0,1e-4,1e-6),
+                        l2=seq(0,1e-4,1e-6))
+search_criteria = list(strategy='RandomDiscrete',
+                       max_runtime_secs=360,
+                       max_models=100,
+                       seed=1031,
+                       stopping_rounds=5,
+                       stopping_tolerance=1e-2)
+grid = h2o.grid(algorithm='deeplearning',
+                grid_id='dl_grid_random',
+                training_frame = train_h2o,
+                validation_frame=validation_h2o,
+                x=2:552,
+                y=1,
+                epochs=10,
+                stopping_metric='logloss', # stop when logloss does not improve by more than 1% for 2 scoring events
+                stopping_tolerance=1e-2,
+                stopping_rounds=2,
+                hyper_params = hyper_parameters,
+                search_criteria = search_criteria)
+```
+
+```{r}
+grid = h2o.getGrid("dl_grid_random",sort_by="logloss",decreasing=FALSE)
+best_model <- h2o.getModel(grid@model_ids[[1]]) ## model with lowest logloss  (on validation, since it was available during training)
+h2o.confusionMatrix(best_model,valid=T)
+```
+```{r}
+grid@summary_table[1,]
+```
+```{r}
+h2o.confusionMatrix(best_model,newdata=test_h2o)
+```
+#build random forest tree
+```{r}
+model3 <- h2o.randomForest(x=2:552,
+                         y = 1,
+                         training_frame = train_h2o, ntree = 200,max_depth = 65, nfold = 10, validation_frame = validation_h2o, seed = 1031)
+```
+```{r}
+h2o.confusionMatrix(model3,validation_h2o) 
+```
+```{r}
+h2o.confusionMatrix(model3,newdata=test_h2o)
+```
+# compared with different models with accuracy in valid 
+```{r}
+library(ggplot2)
+library(plotly)
+library(RColorBrewer)
+library(knitr)
+accuracy_random_forest = 1-0.2865
+accuracy_deep_learning = 1-0.3131
+accuracy_gradient_boosting_machine = 1-0.2514
+accuracy_random_forest_test = 1-0.3048
+accuracy_deep_learning_test = 1-0.3321
+accuracy_gradient_boosting_machine_test = 1- 0.2660
+accuracy_valid = c(accuracy_random_forest,accuracy_deep_learning,accuracy_gradient_boosting_machine)
+accuracy_test =  c(accuracy_random_forest_test,accuracy_deep_learning_test,accuracy_gradient_boosting_machine_test)
+models = c('random forest','deep learning','gradient_boosting_machine')
+model_accuracy = data.frame('model' = models, 'accuracy_valid' = accuracy_valid, 'accuracy_test' = accuracy_test)
+kable(model_accuracy)
+```
+
+#Apply 
+```{r}
+library(tm)
+mydescription = 'good communication python sas nlp r master teamwork leadership fast learner .'
+match_job <- function(d) {
+  newdescription <- c(data$description,d)
+  corpus = Corpus(VectorSource(newdescription ))
+  corpus = tm_map(corpus,FUN = content_transformer(tolower))
+  corpus = tm_map(corpus,FUN = removeWords,c(stopwords('english')))
+  corpus = tm_map(corpus,FUN = stripWhitespace)
+  dict = findFreqTerms(DocumentTermMatrix(Corpus(VectorSource(data$description))),
+                     lowfreq = 0)
+  dict_corpus = Corpus(VectorSource(dict))
+  corpus = tm_map(corpus,FUN = stemDocument)
+  dtm_tfidf = DocumentTermMatrix(x=corpus,
+                               control = list(weighting=function(x) weightTfIdf(x,normalize=F)))
+  xdtm_tfidf = removeSparseTerms(dtm_tfidf,sparse = 0.90)
+  xdtm_tfidf = as.data.frame(as.matrix(xdtm_tfidf))
+  mydes = xdtm_tfidf[nrow(xdtm_tfidf),]
+  mydes_h2o = as.h2o(mydes)
+  pred_job = h2o.predict(model1,newdata = mydes_h2o, type = 'class')
+  pred_job
+}
+match_job(mydescription)
+```
+
+
+```{r}
+newdescription <- c(data$description,mydescription)
+  corpus = Corpus(VectorSource(newdescription ))
+  corpus = tm_map(corpus,FUN = content_transformer(tolower))
+  corpus = tm_map(corpus,FUN = removeWords,c(stopwords('english')))
+  corpus = tm_map(corpus,FUN = stripWhitespace)
+  dict = findFreqTerms(DocumentTermMatrix(Corpus(VectorSource(data$description))),
+                     lowfreq = 0)
+  dict_corpus = Corpus(VectorSource(dict))
+  corpus = tm_map(corpus,FUN = stemDocument)
+  dtm_tfidf = DocumentTermMatrix(x=corpus,
+                               control = list(weighting=function(x) weightTfIdf(x,normalize=F)))
+  xdtm_tfidf = removeSparseTerms(dtm_tfidf,sparse = 0.90)
+  xdtm_tfidf = as.data.frame(as.matrix(xdtm_tfidf))
+  mydes = xdtm_tfidf[nrow(xdtm_tfidf),]
+  mydes
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
